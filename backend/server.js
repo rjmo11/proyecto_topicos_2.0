@@ -15,10 +15,34 @@ const PORT = process.env.PORT || 5000;
 const MONGO_URI = process.env.MONGO_URI;
 const JWT_SECRET = process.env.JWT_SECRET;
 
+// --- VALIDACIÓN DE VARIABLES DE ENTORNO ---
+if (!MONGO_URI) {
+    console.error("❌ ERROR: MONGO_URI no está definida en las variables de entorno");
+    process.exit(1);
+}
+
+if (!JWT_SECRET) {
+    console.error("❌ ERROR: JWT_SECRET no está definida en las variables de entorno");
+    process.exit(1);
+}
+
 // --- CONEXIÓN A MONGODB ATLAS ---
+console.log("🔄 Intentando conectar a MongoDB Atlas...");
 mongoose.connect(MONGO_URI)
-    .then(() => console.log("Conectado a MongoDB Atlas"))
-    .catch((err) => console.error("Error al conectar a MongoDB:", err));
+    .then(() => console.log("✅ Conectado a MongoDB Atlas exitosamente"))
+    .catch((err) => {
+        console.error("❌ Error al conectar a MongoDB:");
+        console.error(`   Tipo: ${err.name}`);
+        console.error(`   Mensaje: ${err.message}`);
+        if (err.code === 8000 || err.message.includes('authentication failed')) {
+            console.error("\n💡 Posibles soluciones:");
+            console.error("   1. Verifica que el usuario y contraseña sean correctos en MongoDB Atlas");
+            console.error("   2. Si tu contraseña tiene caracteres especiales (@, #, !, etc.), deben estar codificados con URL encoding");
+            console.error("   3. Verifica que el usuario tenga permisos de lectura/escritura en la base de datos");
+            console.error("   4. Revisa que la IP de tu servidor esté en la whitelist de MongoDB Atlas");
+        }
+        process.exit(1);
+    });
 
 // --- 1. MODELOS (El "Model" de MVC - Basado en tus imágenes) ---
 
