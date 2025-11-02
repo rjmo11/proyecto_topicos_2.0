@@ -15,34 +15,10 @@ const PORT = process.env.PORT || 5000;
 const MONGO_URI = process.env.MONGO_URI;
 const JWT_SECRET = process.env.JWT_SECRET;
 
-// --- VALIDACIÓN DE VARIABLES DE ENTORNO ---
-if (!MONGO_URI) {
-    console.error("❌ ERROR: MONGO_URI no está definida en las variables de entorno");
-    process.exit(1);
-}
-
-if (!JWT_SECRET) {
-    console.error("❌ ERROR: JWT_SECRET no está definida en las variables de entorno");
-    process.exit(1);
-}
-
 // --- CONEXIÓN A MONGODB ATLAS ---
-console.log("🔄 Intentando conectar a MongoDB Atlas...");
 mongoose.connect(MONGO_URI)
-    .then(() => console.log("✅ Conectado a MongoDB Atlas exitosamente"))
-    .catch((err) => {
-        console.error("❌ Error al conectar a MongoDB:");
-        console.error(`   Tipo: ${err.name}`);
-        console.error(`   Mensaje: ${err.message}`);
-        if (err.code === 8000 || err.message.includes('authentication failed')) {
-            console.error("\n💡 Posibles soluciones:");
-            console.error("   1. Verifica que el usuario y contraseña sean correctos en MongoDB Atlas");
-            console.error("   2. Si tu contraseña tiene caracteres especiales (@, #, !, etc.), deben estar codificados con URL encoding");
-            console.error("   3. Verifica que el usuario tenga permisos de lectura/escritura en la base de datos");
-            console.error("   4. Revisa que la IP de tu servidor esté en la whitelist de MongoDB Atlas");
-        }
-        process.exit(1);
-    });
+    .then(() => console.log("Conectado a MongoDB Atlas"))
+    .catch((err) => console.error("Error al conectar a MongoDB:", err));
 
 // --- 1. MODELOS (El "Model" de MVC - Basado en tus imágenes) ---
 
@@ -55,7 +31,6 @@ const usuarioSchema = new mongoose.Schema({
     favoriteGenres: { type: [String], default: [] },
     friends: { type: [String], default: [] } // Lista de usernames
 });
-// **** ¡CORRECCIÓN! ****
 // Forzamos a Mongoose a usar tu nombre de colección exacto: 'usuarios'
 const Usuario = mongoose.model('Usuario', usuarioSchema, 'usuarios');
 
@@ -75,7 +50,6 @@ cancionSchema.index({
     genres: 'text',
     tags: 'text' 
 });
-// **** ¡CORRECCIÓN! ****
 // Forzamos a Mongoose a usar tu nombre de colección exacto: 'canciones'
 const Cancion = mongoose.model('Cancion', cancionSchema, 'canciones');
 
@@ -88,7 +62,6 @@ const interaccionSchema = new mongoose.Schema({
 });
 // Índice para optimizar búsquedas por usuario
 interaccionSchema.index({ userId: 1, songId: 1, action: 1 });
-// **** ¡CORRECCIÓN! ****
 // Forzamos a Mongoose a usar tu nombre de colección exacto: 'interacciones'
 const Interaccion = mongoose.model('Interaccion', interaccionSchema, 'interacciones');
 
@@ -200,6 +173,106 @@ const authController = {
     }
 };
 
+// --- Controlador de Usuario/Perfil ---
+const userController = {
+    // Obtener mi perfil
+    getMe: async (req, res) => {
+        try {
+            const user = await Usuario.findOne({ username: req.username }).select('-password'); // No enviar el hash
+            if (!user) {
+                return res.status(404).json({ message: "Usuario no encontrado" });
+            }
+            res.json(user);
+        } catch (err) {
+            console.error(err);
+            res.status(500).json({ error: err.message });
+        }
+    },
+    
+    // Actualizar mi perfil (nombre, artistas/géneros fav)
+    updateProfile: async (req, res) => {
+        try {
+            const { name, favoriteArtists, favoriteGenres } = req.body;
+            const updatedUser = await Usuario.findOneAndUpdate(
+                { username: req.username },
+                { $set: { name, favoriteArtists, favoriteGenres } },
+                { new: true, runValidators: true } // 'new: true' devuelve el doc actualizado
+            ).select('-password');
+            
+            res.json(updatedUser);
+        } catch (err) {
+            console.error(err);
+            res.status(500).json({ error: err.message });
+        }
+    },
+    
+    // Añadir un amigo
+    addFriend: async (req, res) => {
+        try {
+            const { friendUsername } = req.body;
+            if (friendUsername === req.username) {
+                return res.status(400).json({ message: "No puedes agregarte a ti mismo" });
+            }
+            
+            const friend = await Usuario.findOne({ username: friendUsername });
+            if (!friend) {
+                return res.status(404).json({ message: "Usuario amigo no encontrado" });
+            }
+            
+            // Añadir amigo a mi lista
+            await Usuario.updateOne(
+                { username: req.username },
+                { $addToSet: { friends: friendUsername } } // $addToSet evita duplicados
+            );
+            // Opcional: Añadirme a la lista del amigo (amistad bidireccional)
+            await Usuario.updateOne(
+                { username: friendUsername },
+                { $addToSet: { friends: req.username } }
+            );
+            
+            res.status(200).json({ message: `¡${friendUsername} ha sido añadido como amigo!` });
+        } catch (err) {
+            console.error(err);
+            res.status(500).json({ error: err.message });
+        }
+    }
+};
+
+// --- Controlador de Datos (para listas de selección) ---
+const dataController = {
+    // Obtener lista única de todos los artistas
+    getAllArtists: async (req, res) => {
+        try {
+            const artists = await Cancion.distinct("artist");
+            res.json(artists.sort());
+        } catch (err) {
+            console.error(err);
+            res.status(500).json({ error: err.message });
+        }
+    },
+    // Obtener lista única de todos los géneros
+    getAllGenres: async (req, res) => {
+        try {
+            const genres = await Cancion.distinct("genres");
+            res.json(genres.sort());
+        } catch (err) {
+            console.error(err);
+            res.status(500).json({ error: err.message });
+        }
+    },
+    // Obtener lista de todos los usuarios (usernames)
+    getAllUsers: async (req, res) => {
+        try {
+            // Devolvemos username y _id, filtramos al usuario actual
+            const users = await Usuario.find({ username: { $ne: req.username } }).select('username');
+            res.json(users);
+        } catch (err) {
+            console.error(err);
+            res.status(500).json({ error: err.message });
+        }
+    }
+};
+
 // --- Controlador de Canciones y Recomendaciones ---
 const recsController = {
     // Obtener todas las canciones (para un carrusel)
@@ -248,7 +321,8 @@ const recsController = {
                     return res.status(400).json({ message: "Ya te gusta esta canción" });
                 }
             }
-
+            
+            // Si es 'play', no necesitamos evitar duplicados, solo registrar
             const newInteraction = new Interaccion({ 
                 userId: username, 
                 songId, 
@@ -272,6 +346,27 @@ const recsController = {
             }).populate('songId'); // .populate() trae la info de la canción
             
             res.json(myLikes.map(interaction => interaction.songId)); // Devolver solo las canciones
+        } catch (err) {
+            console.error(err);
+            res.status(500).json({ error: err.message });
+        }
+    },
+
+    // --- *NUEVO* Obtener mi historial de reproducción ---
+    getMyHistory: async (req, res) => {
+        try {
+            const myHistory = await Interaccion.find({
+                userId: req.username,
+                action: 'play'
+            })
+            .sort({ ts: -1 }) // Más recientes primero
+            .populate('songId')
+            .limit(50); // Límite de 50
+            
+            // Evitar duplicados en el historial (solo mostrar la última vez que se tocó)
+            const uniqueHistory = [...new Map(myHistory.map(item => [item.songId._id.toString(), item.songId])).values()];
+            
+            res.json(uniqueHistory);
         } catch (err) {
             console.error(err);
             res.status(500).json({ error: err.message });
@@ -371,6 +466,71 @@ const recsController = {
             console.error(err);
             res.status(500).json({ error: err.message });
         }
+    },
+    
+    // Carrusel 4: Basado en Perfil (Artistas/Géneros Favoritos)
+    getProfileBasedRecs: async (req, res) => {
+        try {
+            // 1. Obtener mi perfil
+            const user = await Usuario.findOne({ username: req.username });
+            if (!user) return res.status(404).json([]);
+            
+            const { favoriteArtists, favoriteGenres } = user;
+            if (favoriteArtists.length === 0 && favoriteGenres.length === 0) {
+                return res.json([]);
+            }
+
+            // 2. Encontrar mis "likes" para no repetirlos
+            const myLikes = await Interaccion.find({ userId: req.username, action: 'like' });
+            const myLikedSongIds = myLikes.map(l => l.songId);
+            
+            // 3. Buscar canciones de esos artistas/géneros que no me gusten ya
+            const recs = await Cancion.find({
+                _id: { $nin: myLikedSongIds },
+                $or: [
+                    { artist: { $in: favoriteArtists } },
+                    { genres: { $in: favoriteGenres } }
+                ]
+            }).limit(20);
+            
+            res.json(recs);
+        } catch (err) {
+            console.error(err);
+            res.status(500).json({ error: err.message });
+        }
+    },
+    
+    // Carrusel 5: Actividad de Amigos
+    getFriendBasedRecs: async (req, res) => {
+        try {
+            // 1. Obtener mi perfil y mi lista de amigos
+            const user = await Usuario.findOne({ username: req.username });
+            if (!user || user.friends.length === 0) {
+                return res.json([]);
+            }
+            
+            // 2. Encontrar mis "likes" para no repetirlos
+            const myLikes = await Interaccion.find({ userId: req.username, action: 'like' });
+            const myLikedSongIds = myLikes.map(l => l.songId);
+            
+            // 3. Obtener los "likes" de mis amigos
+            const friendLikes = await Interaccion.find({
+                userId: { $in: user.friends }, // Solo de mis amigos
+                action: 'like',
+                songId: { $nin: myLikedSongIds } // Que no me gusten a mi
+            })
+            .sort({ ts: -1 }) // Mostrar lo más reciente
+            .populate('songId')
+            .limit(30);
+            
+            // Evitar duplicados
+            const uniqueRecs = [...new Map(friendLikes.map(item => [item.songId._id.toString(), item.songId])).values()];
+            
+            res.json(uniqueRecs.slice(0, 20));
+        } catch (err) {
+            console.error(err);
+            res.status(500).json({ error: err.message });
+        }
     }
 };
 
@@ -382,16 +542,33 @@ app.get('/api/populate-songs', authController.populateSongs); // Ruta para carga
 
 // Rutas protegidas (requieren token)
 app.use('/api', authMiddleware); // Todo lo que sigue requiere autenticación
+
+// Rutas de Canciones e Interacciones
 app.get('/api/songs', recsController.getAllSongs);
 app.get('/api/songs/search', recsController.searchSongs);
-app.post('/api/songs/:id/interact', recsController.postInteraction); // Nueva ruta para interacciones
+app.post('/api/songs/:id/interact', recsController.postInteraction);
 app.get('/api/me/likes', recsController.getMyLikes);
+app.get('/api/me/history', recsController.getMyHistory); // *NUEVO*
+
+// Rutas de Perfil y Amigos
+app.get('/api/me/profile', userController.getMe);
+app.put('/api/me/profile', userController.updateProfile);
+app.post('/api/me/friends', userController.addFriend);
+
+// Rutas de Recomendaciones
 app.get('/api/recs/content-based', recsController.getContentBasedRecs);
 app.get('/api/recs/user-based', recsController.getUserBasedRecs);
 app.get('/api/recs/popular', recsController.getPopularRecs);
+app.get('/api/recs/profile-based', recsController.getProfileBasedRecs);
+app.get('/api/recs/friend-based', recsController.getFriendBasedRecs);
+
+// Rutas de Datos (para listas de selección)
+app.get('/api/data/all-artists', dataController.getAllArtists);
+app.get('/api/data/all-genres', dataController.getAllGenres);
+app.get('/api/data/all-users', dataController.getAllUsers);
+
 
 // --- INICIAR SERVIDOR ---
 app.listen(PORT, () => {
     console.log(`Servidor corriendo en http://localhost:${PORT}`);
 });
-
