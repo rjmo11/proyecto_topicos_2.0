@@ -376,38 +376,63 @@ const recsController = {
     // --- Algoritmos de Recomendación ---
 
     // Carrusel 1: Basado en Contenido ("Porque te gusta...")
-    getContentBasedRecs: async (req, res) => {
-        try {
-            // 1. Buscar canciones que me han gustado ('like')
-            const myLikes = await Interaccion.find({ 
-                userId: req.username, 
-                action: 'like' 
-            }).populate('songId');
-            
-            if (myLikes.length === 0) {
-                return res.json([]);
-            }
-            
-            const myLikedSongIds = myLikes.map(like => like.songId._id);
-            // 2. Obtener géneros y tags de esas canciones
-            const likedGenres = [...new Set(myLikes.flatMap(like => like.songId.genres))];
-            const likedTags = [...new Set(myLikes.flatMap(like => like.songId.tags))];
-            
-            // 3. Buscar canciones con esos géneros/tags, que no me gusten ya
-            const recs = await Cancion.find({
-                _id: { $nin: myLikedSongIds }, // $nin = "not in" (que no me gusten)
-                $or: [
-                    { genres: { $in: likedGenres } },
-                    { tags: { $in: likedTags } }
-                ]
-            }).limit(20);
-            
-            res.json(recs);
-        } catch (err) {
-            console.error(err);
-            res.status(500).json({ error: err.message });
+
+getContentBasedRecs: async (req, res) => {
+    try {
+        // 1. Encontrar canciones que me han gustado ('like')
+        const myLikes = await Interaccion.find({ 
+            userId: req.username, 
+            action: 'like' 
+        }).populate('songId');
+        
+        if (myLikes.length === 0) {
+            // Si no hay likes, devolvemos una lista de populares o vacía.
+            // Para el examen, lo dejamos vacío para no confundir.
+            return res.json([]); 
         }
-    },
+        
+        const myLikedSongIds = myLikes.map(like => like.songId._id);
+        
+        // 2. Obtener los "rasgos" de las canciones que me gustan
+        // Aplanar todos los arrays de géneros y tags en listas únicas
+        const likedGenres = [...new Set(myLikes.flatMap(like => like.songId.genres))];
+        const likedTags = [...new Set(myLikes.flatMap(like => like.songId.tags))];
+        
+        // 3. Usar Aggregation para priorizar, puntuar y diversificar
+        const recs = await Cancion.aggregate([
+            // a. Filtrar canciones que no me gusten ya (la clave para no repetir)
+            { $match: { _id: { $nin: myLikedSongIds } } },
+            
+            // b. Asignar un "Score" a cada canción por coincidencia de atributos
+            { $addFields: {
+                // Puntuación por Género
+                genreMatchScore: { $size: { $setIntersection: ["$genres", likedGenres] } }, 
+                // Puntuación por Tag
+                tagMatchScore: { $size: { $setIntersection: ["$tags", likedTags] } }
+            }},
+            
+            // c. Calcular el Score Total (Aseguramos que haya algo de match)
+            { $addFields: {
+                totalScore: { $add: ["$genreMatchScore", "$tagMatchScore"] }
+            }},
+            
+            // d. Solo considerar canciones con match (> 0)
+            { $match: { totalScore: { $gt: 0 } } },
+            
+            // e. Ordenar por Score (más relevante)
+            { $sort: { totalScore: -1 } },
+            
+            // f. Tomar 40 candidatas y luego 20 al azar para diversidad
+            { $limit: 40 }, 
+            { $sample: { size: 20 } } 
+        ]);
+        
+        res.json(recs);
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: err.message });
+    }
+},
 
     // Carrusel 2: Basado en Usuarios ("Usuarios como tú...")
     getUserBasedRecs: async (req, res) => {
